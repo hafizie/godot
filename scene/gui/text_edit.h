@@ -280,7 +280,7 @@ private:
 	PopupMenu *menu_ctl = nullptr;
 
 	void _generate_context_menu();
-	int _get_menu_action_accelerator(const String &p_action);
+	Key _get_menu_action_accelerator(const String &p_action);
 
 	/* Versioning */
 	struct TextOperation {
@@ -395,6 +395,7 @@ private:
 	} selection;
 
 	bool selecting_enabled = true;
+	bool deselect_on_focus_loss_enabled = true;
 
 	Color font_selected_color = Color(1, 1, 1);
 	Color selection_color = Color(1, 1, 1);
@@ -752,6 +753,9 @@ public:
 	/* Selection. */
 	void set_selecting_enabled(const bool p_enabled);
 	bool is_selecting_enabled() const;
+
+	void set_deselect_on_focus_loss_enabled(const bool p_enabled);
+	bool is_deselect_on_focus_loss_enabled() const;
 
 	void set_override_selected_font_color(bool p_override_selected_font_color);
 	bool is_overriding_selected_font_color() const;

@@ -253,7 +253,30 @@ public:
 		Ref<PackedScene> scene;
 		Vector2 offset;
 	};
-	typedef Array TerrainsPattern;
+
+	class TerrainsPattern {
+		bool valid = false;
+		int bits[TileSet::CELL_NEIGHBOR_MAX];
+		bool is_valid_bit[TileSet::CELL_NEIGHBOR_MAX];
+
+		int not_empty_terrains_count = 0;
+
+	public:
+		bool is_valid() const;
+		bool is_erase_pattern() const;
+
+		bool operator<(const TerrainsPattern &p_terrains_pattern) const;
+		bool operator==(const TerrainsPattern &p_terrains_pattern) const;
+
+		void set_terrain(TileSet::CellNeighbor p_peering_bit, int p_terrain);
+		int get_terrain(TileSet::CellNeighbor p_peering_bit) const;
+
+		void set_terrains_from_array(Array p_terrains);
+		Array get_terrains_as_array() const;
+
+		TerrainsPattern(const TileSet *p_tile_set, int p_terrain_set);
+		TerrainsPattern() {}
+	};
 
 protected:
 	bool _set(const StringName &p_name, const Variant &p_value);
@@ -478,7 +501,7 @@ public:
 	// Terrains.
 	Set<TerrainsPattern> get_terrains_pattern_set(int p_terrain_set);
 	Set<TileMapCell> get_tiles_for_terrains_pattern(int p_terrain_set, TerrainsPattern p_terrain_tile_pattern);
-	TileMapCell get_random_tile_from_pattern(int p_terrain_set, TerrainsPattern p_terrain_tile_pattern);
+	TileMapCell get_random_tile_from_terrains_pattern(int p_terrain_set, TerrainsPattern p_terrain_tile_pattern);
 
 	// Helpers
 	Vector<Vector2> get_tile_shape_polygon();
@@ -580,6 +603,12 @@ private:
 
 	void _clear_tiles_outside_texture();
 
+	bool use_texture_padding = true;
+	Ref<ImageTexture> padded_texture;
+	bool padded_texture_needs_update = false;
+	void _queue_update_padded_texture();
+	void _update_padded_texture();
+
 protected:
 	bool _set(const StringName &p_name, const Variant &p_value);
 	bool _get(const StringName &p_name, Variant &r_ret) const;
@@ -590,6 +619,7 @@ protected:
 public:
 	// Not exposed.
 	virtual void set_tile_set(const TileSet *p_tile_set) override;
+	const TileSet *get_tile_set() const;
 	virtual void notify_tile_data_properties_should_change() override;
 	virtual void add_occlusion_layer(int p_index) override;
 	virtual void move_occlusion_layer(int p_from_index, int p_to_pos) override;
@@ -620,6 +650,10 @@ public:
 	Vector2i get_separation() const;
 	void set_texture_region_size(Vector2i p_tile_size);
 	Vector2i get_texture_region_size() const;
+
+	// Padding.
+	void set_use_texture_padding(bool p_use_padding);
+	bool get_use_texture_padding() const;
 
 	// Base tiles.
 	void create_tile(const Vector2i p_atlas_coords, const Vector2i p_size = Vector2i(1, 1));
@@ -665,6 +699,10 @@ public:
 	Vector2i get_atlas_grid_size() const;
 	Rect2i get_tile_texture_region(Vector2i p_atlas_coords, int p_frame = 0) const;
 	Vector2i get_tile_effective_texture_offset(Vector2i p_atlas_coords, int p_alternative_tile) const;
+
+	// Getters for texture and tile region (padded or not)
+	Ref<Texture2D> get_runtime_texture() const;
+	Rect2i get_runtime_tile_texture_region(Vector2i p_atlas_coords, int p_frame = 0) const;
 
 	~TileSetAtlasSource();
 };
@@ -743,7 +781,7 @@ private:
 		};
 
 		Vector2 linear_velocity;
-		float angular_velocity = 0.0;
+		double angular_velocity = 0.0;
 		Vector<PolygonShapeTileData> polygons;
 	};
 	Vector<PhysicsLayerTileData> physics;
@@ -793,6 +831,9 @@ public:
 	void reset_state();
 	void set_allow_transform(bool p_allow_transform);
 	bool is_allowing_transform() const;
+
+	// To duplicate a TileData object, needed for runtiume update.
+	TileData *duplicate();
 
 	// Rendering
 	void set_flip_h(bool p_flip_h);

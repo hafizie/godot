@@ -187,6 +187,14 @@ void GodotBody2D::set_param(PhysicsServer2D::BodyParameter p_param, const Varian
 		case PhysicsServer2D::BODY_PARAM_GRAVITY_SCALE: {
 			gravity_scale = p_value;
 		} break;
+		case PhysicsServer2D::BODY_PARAM_LINEAR_DAMP_MODE: {
+			int mode_value = p_value;
+			linear_damp_mode = (PhysicsServer2D::BodyDampMode)mode_value;
+		} break;
+		case PhysicsServer2D::BODY_PARAM_ANGULAR_DAMP_MODE: {
+			int mode_value = p_value;
+			angular_damp_mode = (PhysicsServer2D::BodyDampMode)mode_value;
+		} break;
 		case PhysicsServer2D::BODY_PARAM_LINEAR_DAMP: {
 			linear_damp = p_value;
 		} break;
@@ -213,10 +221,16 @@ Variant GodotBody2D::get_param(PhysicsServer2D::BodyParameter p_param) const {
 			return inertia;
 		}
 		case PhysicsServer2D::BODY_PARAM_CENTER_OF_MASS: {
-			return center_of_mass;
+			return center_of_mass_local;
 		}
 		case PhysicsServer2D::BODY_PARAM_GRAVITY_SCALE: {
 			return gravity_scale;
+		}
+		case PhysicsServer2D::BODY_PARAM_LINEAR_DAMP_MODE: {
+			return linear_damp_mode;
+		}
+		case PhysicsServer2D::BODY_PARAM_ANGULAR_DAMP_MODE: {
+			return angular_damp_mode;
 		}
 		case PhysicsServer2D::BODY_PARAM_LINEAR_DAMP: {
 			return linear_damp;
@@ -396,15 +410,6 @@ void GodotBody2D::set_space(GodotSpace2D *p_space) {
 	}
 }
 
-void GodotBody2D::_compute_area_gravity_and_damping(const GodotArea2D *p_area) {
-	Vector2 area_gravity;
-	p_area->compute_gravity(get_transform().get_origin(), area_gravity);
-	gravity += area_gravity;
-
-	area_linear_damp += p_area->get_linear_damp();
-	area_angular_damp += p_area->get_angular_damp();
-}
-
 void GodotBody2D::_update_transform_dependent() {
 	center_of_mass = get_transform().basis_xform(center_of_mass_local);
 }
@@ -414,61 +419,132 @@ void GodotBody2D::integrate_forces(real_t p_step) {
 		return;
 	}
 
-	GodotArea2D *def_area = get_space()->get_default_area();
-	// GodotArea2D *damp_area = def_area;
-	ERR_FAIL_COND(!def_area);
+	ERR_FAIL_COND(!get_space());
 
 	int ac = areas.size();
+
+	bool gravity_done = false;
+	bool linear_damp_done = false;
+	bool angular_damp_done = false;
+
 	bool stopped = false;
+
 	gravity = Vector2(0, 0);
-	area_angular_damp = 0;
-	area_linear_damp = 0;
+
+	total_linear_damp = 0.0;
+	total_angular_damp = 0.0;
+
+	// Combine gravity and damping from overlapping areas in priority order.
 	if (ac) {
 		areas.sort();
 		const AreaCMP *aa = &areas[0];
-		// damp_area = aa[ac-1].area;
 		for (int i = ac - 1; i >= 0 && !stopped; i--) {
-			PhysicsServer2D::AreaSpaceOverrideMode mode = aa[i].area->get_space_override_mode();
-			switch (mode) {
-				case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE:
-				case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE: {
-					_compute_area_gravity_and_damping(aa[i].area);
-					stopped = mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
-				} break;
-				case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE:
-				case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE: {
-					gravity = Vector2(0, 0);
-					area_angular_damp = 0;
-					area_linear_damp = 0;
-					_compute_area_gravity_and_damping(aa[i].area);
-					stopped = mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE;
-				} break;
-				default: {
+			if (!gravity_done) {
+				PhysicsServer2D::AreaSpaceOverrideMode area_gravity_mode = (PhysicsServer2D::AreaSpaceOverrideMode)(int)aa[i].area->get_param(PhysicsServer2D::AREA_PARAM_GRAVITY_OVERRIDE_MODE);
+				if (area_gravity_mode != PhysicsServer2D::AREA_SPACE_OVERRIDE_DISABLED) {
+					Vector2 area_gravity;
+					aa[i].area->compute_gravity(get_transform().get_origin(), area_gravity);
+					switch (area_gravity_mode) {
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE:
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE: {
+							gravity += area_gravity;
+							gravity_done = area_gravity_mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+						} break;
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE:
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE: {
+							gravity = area_gravity;
+							gravity_done = area_gravity_mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE;
+						} break;
+						default: {
+						}
+					}
 				}
 			}
+			if (!linear_damp_done) {
+				PhysicsServer2D::AreaSpaceOverrideMode area_linear_damp_mode = (PhysicsServer2D::AreaSpaceOverrideMode)(int)aa[i].area->get_param(PhysicsServer2D::AREA_PARAM_LINEAR_DAMP_OVERRIDE_MODE);
+				if (area_linear_damp_mode != PhysicsServer2D::AREA_SPACE_OVERRIDE_DISABLED) {
+					real_t area_linear_damp = aa[i].area->get_linear_damp();
+					switch (area_linear_damp_mode) {
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE:
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE: {
+							total_linear_damp += area_linear_damp;
+							linear_damp_done = area_linear_damp_mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+						} break;
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE:
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE: {
+							total_linear_damp = area_linear_damp;
+							linear_damp_done = area_linear_damp_mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE;
+						} break;
+						default: {
+						}
+					}
+				}
+			}
+			if (!angular_damp_done) {
+				PhysicsServer2D::AreaSpaceOverrideMode area_angular_damp_mode = (PhysicsServer2D::AreaSpaceOverrideMode)(int)aa[i].area->get_param(PhysicsServer2D::AREA_PARAM_ANGULAR_DAMP_OVERRIDE_MODE);
+				if (area_angular_damp_mode != PhysicsServer2D::AREA_SPACE_OVERRIDE_DISABLED) {
+					real_t area_angular_damp = aa[i].area->get_angular_damp();
+					switch (area_angular_damp_mode) {
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE:
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE: {
+							total_angular_damp += area_angular_damp;
+							angular_damp_done = area_angular_damp_mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_COMBINE_REPLACE;
+						} break;
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE:
+						case PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE_COMBINE: {
+							total_angular_damp = area_angular_damp;
+							angular_damp_done = area_angular_damp_mode == PhysicsServer2D::AREA_SPACE_OVERRIDE_REPLACE;
+						} break;
+						default: {
+						}
+					}
+				}
+			}
+			stopped = gravity_done && linear_damp_done && angular_damp_done;
 		}
 	}
+
+	// Add default gravity and damping from space area.
 	if (!stopped) {
-		_compute_area_gravity_and_damping(def_area);
+		GodotArea2D *default_area = get_space()->get_default_area();
+		ERR_FAIL_COND(!default_area);
+
+		if (!gravity_done) {
+			Vector2 default_gravity;
+			default_area->compute_gravity(get_transform().get_origin(), default_gravity);
+			gravity += default_gravity;
+		}
+
+		if (!linear_damp_done) {
+			total_linear_damp += default_area->get_linear_damp();
+		}
+
+		if (!angular_damp_done) {
+			total_angular_damp += default_area->get_angular_damp();
+		}
 	}
+
+	// Override linear damping with body's value.
+	switch (linear_damp_mode) {
+		case PhysicsServer2D::BODY_DAMP_MODE_COMBINE: {
+			total_linear_damp += linear_damp;
+		} break;
+		case PhysicsServer2D::BODY_DAMP_MODE_REPLACE: {
+			total_linear_damp = linear_damp;
+		} break;
+	}
+
+	// Override angular damping with body's value.
+	switch (angular_damp_mode) {
+		case PhysicsServer2D::BODY_DAMP_MODE_COMBINE: {
+			total_angular_damp += angular_damp;
+		} break;
+		case PhysicsServer2D::BODY_DAMP_MODE_REPLACE: {
+			total_angular_damp = angular_damp;
+		} break;
+	}
+
 	gravity *= gravity_scale;
-
-	// If less than 0, override dampenings with that of the Body2D
-	if (angular_damp >= 0) {
-		area_angular_damp = angular_damp;
-	}
-	/*
-	else
-		area_angular_damp=damp_area->get_angular_damp();
-	*/
-
-	if (linear_damp >= 0) {
-		area_linear_damp = linear_damp;
-	}
-	/*
-	else
-		area_linear_damp=damp_area->get_linear_damp();
-	*/
 
 	Vector2 motion;
 	bool do_motion = false;
@@ -483,13 +559,6 @@ void GodotBody2D::integrate_forces(real_t p_step) {
 
 		do_motion = true;
 
-		/*
-		for(int i=0;i<get_shape_count();i++) {
-			set_shape_kinematic_advance(i,Vector2());
-			set_shape_kinematic_retreat(i,0);
-		}
-		*/
-
 	} else {
 		if (!omit_force_integration) {
 			//overridden by direct state query
@@ -498,13 +567,13 @@ void GodotBody2D::integrate_forces(real_t p_step) {
 			force += applied_force;
 			real_t torque = applied_torque;
 
-			real_t damp = 1.0 - p_step * area_linear_damp;
+			real_t damp = 1.0 - p_step * total_linear_damp;
 
 			if (damp < 0) { // reached zero in the given time
 				damp = 0;
 			}
 
-			real_t angular_damp = 1.0 - p_step * area_angular_damp;
+			real_t angular_damp = 1.0 - p_step * total_angular_damp;
 
 			if (angular_damp < 0) { // reached zero in the given time
 				angular_damp = 0;
@@ -523,8 +592,6 @@ void GodotBody2D::integrate_forces(real_t p_step) {
 		}
 	}
 
-	//motion=linear_velocity*p_step;
-
 	biased_angular_velocity = 0;
 	biased_linear_velocity = Vector2();
 
@@ -532,8 +599,6 @@ void GodotBody2D::integrate_forces(real_t p_step) {
 		_update_shapes_with_motion(motion);
 	}
 
-	// damp_area=nullptr; // clear the area, so it is set in the next frame
-	def_area = nullptr; // clear the area, so it is set in the next frame
 	contact_count = 0;
 }
 
